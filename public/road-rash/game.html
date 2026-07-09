@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Road-Rash</title>
+	<link rel="stylesheet" type="text/css" href="css/reset.css">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@1,900&display=swap" rel="stylesheet">
+	<style>
+		@font-face {
+			font-family: 'DS-DIGIT';
+			src: url('fonts/DS-DIGIT.TTF') format('truetype');
+		}
+		body, html {
+			margin: 0;
+			padding: 0;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background-color: #000;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+		}
+		canvas {
+			width: 100%;
+			height: 100%;
+			object-fit: contain;
+			image-rendering: pixelated;
+		}
+	</style>
+</head>
+<body>
+	<!-- Preload fonts for Canvas rendering -->
+	<div style="font-family: 'DS-DIGIT'; position: absolute; visibility: hidden;">LCD Font Loader</div>
+	<div style="font-family: 'Exo 2'; font-style: italic; font-weight: 900; position: absolute; visibility: hidden;">Sporty Font Loader</div>
+	<canvas id="canvas"></canvas>
+	<div id="error-log" style="color: red; position: absolute; top: 10px; left: 10px; z-index: 1000; font-family: monospace;"></div>
+	<script>
+		window.onerror = function(msg, url, lineNo, columnNo, error) {
+			document.getElementById('error-log').innerHTML += '<br>' + msg + ' at ' + lineNo + ':' + columnNo;
+			return false;
+		};
+	</script>
+	<script src="js/variables.js"></script>
+	<script src="js/math.js"></script>
+	<script src="js/gameLoad.js"></script>
+	<script src="js/render.js"></script>
+	<script src="js/dashboard.js"></script>
+	<script src="js/script.js"></script>
+</body>
+</html>
