@@ -22,9 +22,18 @@ var Render = {
         l2 = Render.laneMarkerWidth(w2, lanes),
         lanew1, lanew2, lanex1, lanex2, lane;
 
-    var gnd=SPRITES.GROUND;
-    ctx.drawImage(sprites,gnd.x,gnd.y,gnd.w,gnd.h,0, y2, width, y1 - y2);
+    // Draw the deep blue water as the base ground layer across the entire screen width
+    ctx.fillStyle = color.water || color.grass;
+    ctx.fillRect(0, y2, width, y1 - y2);
 
+    // Draw the tan beach extending outward from the road's edge
+    var bW1 = w1 * 4; // Beach extends 4x the road width (narrowed so water is visible)
+    var bW2 = w2 * 4;
+    var beachColor = color.beach || color.grass;
+    Render.polygon(ctx, x1-w1-r1-bW1, y1, x1-w1-r1, y1, x2-w2-r2, y2, x2-w2-r2-bW2, y2, beachColor); // left beach
+    Render.polygon(ctx, x1+w1+r1, y1, x1+w1+r1+bW1, y1, x2+w2+r2+bW2, y2, x2+w2+r2, y2, beachColor); // right beach
+
+    // Draw rumble strips and road on top of the beach
     Render.polygon(ctx, x1-w1-r1, y1, x1-w1, y1, x2-w2, y2, x2-w2-r2, y2, color.rumble);
     Render.polygon(ctx, x1+w1+r1, y1, x1+w1, y1, x2+w2, y2, x2+w2+r2, y2, color.rumble);
     Render.polygon(ctx, x1-w1,    y1, x1+w1, y1, x2+w2, y2, x2-w2,    y2, color.road);
@@ -65,20 +74,29 @@ var Render = {
 
 
 
-  sprite: function(ctx, width, height, resolution, roadWidth, sprites, sprite, scale, destX, destY, offsetX, offsetY, clipY) {
+  sprite: function(ctx, width, height, resolution, roadWidth, sprites, sprite, scale, destX, destY, offsetX, offsetY, clipY, scaleY, flipX) {
+  
+      if (scaleY === undefined) scaleY = scale;
+      var destW  = Math.round((sprite.w * scale * width/2) * (SPRITES.SCALE * roadWidth));
+      var destH  = Math.round((sprite.h * scaleY * width/2) * (SPRITES.SCALE * roadWidth));
 
-    var destW  = (sprite.w * scale * width/2) * (SPRITES.SCALE * roadWidth);
-    var destH  = (sprite.h * scale * width/2) * (SPRITES.SCALE * roadWidth);
-
-    destX = destX + (destW * (offsetX || 0));
-    destY = destY + (destH * (offsetY || 0));
+    destX = Math.round(destX + (destW * (offsetX || 0)));
+    destY = Math.round(destY + (destH * (offsetY || 0)));
 
     var clipH = clipY ? Math.max(0, destY+destH-clipY) : 0;
     if (clipH < destH) {
+      if (flipX) {
+        ctx.save();
+        ctx.scale(-1, 1);
+        destX = -destX - destW;
+      }
       if (sprite.image) {
         ctx.drawImage(sprite.image, 0, 0, sprite.w, sprite.h - (sprite.h*clipH/destH), destX, destY, destW, destH - clipH);
       } else {
         ctx.drawImage(sprites, sprite.x, sprite.y, sprite.w, sprite.h - (sprite.h*clipH/destH), destX, destY, destW, destH - clipH);
+      }
+      if (flipX) {
+        ctx.restore();
       }
     }
   },
@@ -121,7 +139,10 @@ var Render = {
     // Isolate player scaling from global SPRITES.SCALE (21 was the original sprite width, 2.8 is the desired magnification)
     var customScale = scale * (21 / sprite.w) * 2.8;
 
-    Render.sprite(ctx, width, height, resolution, roadWidth, sprites, sprite, customScale, destX, destY + bounce, -0.5, -1);
+    var isVisible = window.playerCrashedTimer <= 0 || (Math.floor(window.playerCrashedTimer * 10) % 2 !== 0);
+    if (isVisible) {
+      Render.sprite(ctx, width, height, resolution, roadWidth, sprites, sprite, customScale, destX, destY, -0.5, -1);
+    }
   },
 
 

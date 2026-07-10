@@ -2,6 +2,11 @@ var bikeForward = { play: function(){}, pause: function(){} };
 var kick = { play: function(){}, pause: function(){} };
 var crash = { play: function(){}, pause: function(){} };
 
+var engineStartSound = new Audio("sfx/engine-start.wav");
+engineStartSound.volume = 0.5;
+var crowbarHitSound = new Audio("sfx/crowbar-hit.wav");
+var swingWhiffSound = new Audio("sfx/swing-whiff.wav");
+
 var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 var musicBuffer = null;
 var musicNode = null;
@@ -21,7 +26,7 @@ function playMusic() {
     musicNode.buffer = musicBuffer;
     musicNode.loop = true;
     var gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0.5;
+    gainNode.gain.value = 0.0; // MUTED
     musicNode.connect(gainNode);
     gainNode.connect(audioCtx.destination);
     musicNode.start();
@@ -34,7 +39,7 @@ function playBeep(freq, duration) {
   var gain = audioCtx.createGain();
   osc.type = 'square';
   osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
   gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
   osc.connect(gain);
   gain.connect(audioCtx.destination);
@@ -58,8 +63,7 @@ var fps           = 60;
 var step          = 1/fps;
 var width         = 1280;
 var height        = 720;
-var centrifugal   = 0.3;
-var offRoadDecel  = 0.99;
+var centrifugal   = 0.3;  // Reference value from jakesgordon javascript-racer
 var skySpeed      = 0.001;
 var hillSpeed     = 0.002;
 var treeSpeed     = 0.003;
@@ -67,6 +71,7 @@ var skyOffset     = 0;
 var hillOffset    = 0;
 var treeOffset    = 0;
 var segments      = [];
+var dustParticles = [];
 
 var cars           = [];
 var totalCars = 30;
@@ -95,12 +100,12 @@ var playerVelocityX = 0;
 
 var position      = 0;
 var speed         = 0;
-var maxSpeed      = segmentLength/step;
+var maxSpeed      = (segmentLength/step) * 1.2;
 var accel         =  maxSpeed/5;
 var breaking      = -maxSpeed;
 var decel         = -maxSpeed/5;
-var offRoadDecel  = -maxSpeed/2;
-var offRoadLimit  =  maxSpeed/4;
+var offRoadDecel  = -maxSpeed/2;  // Reference: -maxSpeed/2 (jakesgordon), ~30% speed on RR3 sand
+var offRoadLimit  =  maxSpeed/4;  // Reference: maxSpeed/4 = 25% of max speed off-road
 
 var keyLeft       = false;
 var keyRight      = false;
@@ -134,10 +139,10 @@ var COLORS = {
   SKY:  '#72D7EE',
   TREE: '#005108',
   FOG:  '#005108',
-  LIGHT:  { road: '#6B6B6B', grass: '#4A1134', rumble: '#555555', lane: '#CCCCCC'  },
-  DARK:   { road: '#6B6B6B', grass: '#2E071E', rumble: '#BBBBBB'                   },
-  START:  { road: 'white',   grass: 'white',   rumble: 'white'                     },
-  FINISH: { road: 'black',   grass: 'black',   rumble: 'black'                     }
+  LIGHT:  { road: '#6B6B6B', grass: '#4A1134', rumble: '#555555', lane: '#CCCCCC', beach: '#E2C29A', water: '#1F3C59' },
+  DARK:   { road: '#6B6B6B', grass: '#2E071E', rumble: '#BBBBBB', beach: '#D6B48D', water: '#1F3C59' },
+  START:  { road: 'white',   grass: 'white',   rumble: 'white', beach: 'white', water: 'white' },
+  FINISH: { road: 'black',   grass: 'black',   rumble: 'black', beach: 'black', water: 'black' }
 };
 
 var BACKGROUND = {
