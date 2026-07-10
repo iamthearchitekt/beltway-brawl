@@ -36,7 +36,23 @@ var Render = {
     // Draw rumble strips and road on top of the beach
     Render.polygon(ctx, x1-w1-r1, y1, x1-w1, y1, x2-w2, y2, x2-w2-r2, y2, color.rumble);
     Render.polygon(ctx, x1+w1+r1, y1, x1+w1, y1, x2+w2, y2, x2+w2+r2, y2, color.rumble);
-    Render.polygon(ctx, x1-w1,    y1, x1+w1, y1, x2+w2, y2, x2-w2,    y2, color.road);
+    
+    if (color.road === 'checkered_even' || color.road === 'checkered_odd') {
+        // Base road color (dark grey)
+        Render.polygon(ctx, x1-w1, y1, x1+w1, y1, x2+w2, y2, x2-w2, y2, '#333333');
+        // Draw alternating white squares across the road width
+        var numSquares = 8;
+        var startIdx = (color.road === 'checkered_even') ? 0 : 1;
+        for (var i = startIdx; i < numSquares; i += 2) {
+            var sx1 = x1 - w1 + (w1 * 2 / numSquares) * i;
+            var sx2 = x2 - w2 + (w2 * 2 / numSquares) * i;
+            var sw1 = (w1 * 2 / numSquares);
+            var sw2 = (w2 * 2 / numSquares);
+            Render.polygon(ctx, sx1, y1, sx1 + sw1, y1, sx2 + sw2, y2, sx2, y2, 'white');
+        }
+    } else {
+        Render.polygon(ctx, x1-w1, y1, x1+w1, y1, x2+w2, y2, x2-w2, y2, color.road);
+    }
 
     if (color.lane) {
       lanew1 = w1*2/lanes;
@@ -136,13 +152,13 @@ var Render = {
       }
     }
 
-    // Isolate player scaling from global SPRITES.SCALE (21 was the original sprite width, 2.8 is the desired magnification)
-    var customScale = scale * (21 / sprite.w) * 2.8;
-
-    var isVisible = window.playerCrashedTimer <= 0 || (Math.floor(window.playerCrashedTimer * 10) % 2 !== 0);
-    if (isVisible) {
-      Render.sprite(ctx, width, height, resolution, roadWidth, sprites, sprite, customScale, destX, destY, -0.5, -1);
-    }
+      // Isolate player scaling from global SPRITES.SCALE
+      var customScale = scale * (21 / sprite.w) * 3.2; // Decreased multiplier slightly so he matches enemies perfectly
+  
+      var isVisible = window.playerCrashedTimer <= 0 || (Math.floor(window.playerCrashedTimer * 10) % 2 !== 0);
+      if (isVisible) {
+        Render.sprite(ctx, width, height, resolution, roadWidth, sprites, sprite, customScale, destX, destY, -0.5, -1.25); // -1.25 offset lifts him up
+      }
   },
 
 

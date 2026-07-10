@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>Road-Rash</title>
+	<title>Beltway Brawl</title>
 	<link rel="stylesheet" type="text/css" href="css/reset.css">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -10,6 +10,10 @@
 		@font-face {
 			font-family: 'DS-DIGIT';
 			src: url('fonts/DS-DIGIT.TTF') format('truetype');
+		}
+		@font-face {
+			font-family: 'Upheaval Pro';
+			src: url('fonts/UpheavalPro.ttf') format('truetype');
 		}
 		body, html {
 			margin: 0;
@@ -32,6 +36,7 @@
 </head>
 <body>
 	<!-- Preload fonts for Canvas rendering -->
+	<div style="font-family: 'Upheaval Pro'; position: absolute; visibility: hidden;">preload</div>
 	<div style="font-family: 'DS-DIGIT'; position: absolute; visibility: hidden;">LCD Font Loader</div>
 	<div style="font-family: 'Exo 2'; font-style: italic; font-weight: 900; position: absolute; visibility: hidden;">Sporty Font Loader</div>
 	<canvas id="canvas"></canvas>

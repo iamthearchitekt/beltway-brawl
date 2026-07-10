@@ -163,7 +163,7 @@ class RetroAudioEngine {
         // Dynamic Response Speed for Idle Fade
         let currentPitchResponse = this.pitchResponseSpeed;
         if (throttle === 0) {
-            currentPitchResponse = 2.0; // Much smoother, slower deceleration across the board
+            currentPitchResponse = 8.0; // Fast deceleration when letting off the throttle!
         } else if (this.enginePitch < 0.75 && targetPitch > this.enginePitch) {
             currentPitchResponse = 1.5; // Very slow rev up from idle!
         }

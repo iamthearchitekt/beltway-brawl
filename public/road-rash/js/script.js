@@ -4,6 +4,12 @@ window.onerror = function(msg, url, lineNo, columnNo, error) {
 };
 
 function update(dt) {
+  
+    // Track elapsed race time
+    if (typeof window.raceTime === 'undefined') window.raceTime = 0;
+    if (gameStart && !playerFinish) {
+      window.raceTime += dt;
+    }
 
   // Gamepad polling
   if (navigator.getGamepads) {
@@ -83,15 +89,21 @@ function update(dt) {
 
   // var startPosition = position;
 
-  // Inside Turn Advantage (Player)
+  // Racing Line Advantage (Player)
+  // The curve value indicates bend direction. Positive playerX on a positive curve = inside line (apex).
+  // curveAdvantage > 0 means player is on the inside of the turn (correct racing line).
+  // curveAdvantage < 0 means player is on the outside (wrong line, fighting the corner).
   var clampedOffset = Math.max(-1, Math.min(1, playerX));
   var curveAdvantage = playerSegment.curve * clampedOffset;
-  var speedMultiplier = 1.0;
-  if (curveAdvantage > 0) {
-      speedMultiplier = 1.0 + (curveAdvantage * 0.04); // Up to 16% speed boost for hugging the inside
-  } else if (curveAdvantage < 0) {
-      speedMultiplier = 1.0 + (curveAdvantage * 0.04); // Up to 16% penalty for taking the outside
-  }
+  
+  // Position advance multiplier: inside line = shorter arc = more ground covered
+  var speedMultiplier = 1.0 + (curveAdvantage * 0.08); // Up to ~25% faster on apex, ~25% slower wide
+  speedMultiplier = Math.max(0.75, Math.min(1.25, speedMultiplier));
+  
+  // Racing line friction factor: inside line bleeds almost no speed, outside line bleeds a lot
+  // This is stored for use in the cornering friction block below
+  window.racingLineFrictionFactor = 1.0 - (curveAdvantage * 0.6); // 0.4 on apex, 1.6 on outside line
+  window.racingLineFrictionFactor = Math.max(0.1, Math.min(1.8, window.racingLineFrictionFactor));
   
   position = AllFn.increase(position, dt * speed * speedMultiplier, trackLength);
   currentPosition += dt * speed;
@@ -118,9 +130,13 @@ function update(dt) {
       }
   }
 
-  if (currentPosition > trackLength) {
-    crossFinish = true;
-  }
+    var currentPosition = position;
+    position = AllFn.increase(position, dt * speed, trackLength);
+    // Trigger finish ONLY when position wraps from end of track to beginning
+    if (position < currentPosition && currentPosition > trackLength / 2) {
+      crossFinish = true;
+      if (!window.playerFinishTime) window.playerFinishTime = window.raceTime;
+    }
 
   skyOffset  = AllFn.increase(skyOffset,  skySpeed  * playerSegment.curve * speedPercent, 1);
   hillOffset = AllFn.increase(hillOffset, hillSpeed * playerSegment.curve * speedPercent, 1);
@@ -139,29 +155,43 @@ function update(dt) {
       playerLean = Math.max(playerLean - 2 * dt, -1);
     } else if (keyRight) {
       playerLean = Math.min(playerLean + 2 * dt, 1);
-    } else {
-      playerLean = playerLean > 0 ? Math.max(playerLean - 2 * dt, 0) : Math.min(playerLean + 2 * dt, 0);
-    }
+      } else {
+        playerLean = playerLean > 0 ? Math.max(playerLean - 2 * dt, 0) : Math.min(playerLean + 2 * dt, 0);
+      }
+  
+      // Apply lean to velocity (Increased steering authority to counter higher centrifugal forces)
+      playerVelocityX = playerLean * dx * 2.0;
+      playerX += playerVelocityX;
 
-    // Apply lean to velocity
-    playerVelocityX = playerLean * dx * 1.25;
-    playerX += playerVelocityX;
-
-    playerX = playerX - (dx * speedPercent * playerSegment.curve * centrifugal);
-
-    if (window.playerCrashedTimer > 0) {
-      speed = AllFn.accelerate(speed, decel * 2, dt); // Decelerate quickly if crashed
-    } else if (keyFaster) {
-      // Dynamic acceleration: Fast off the line, gradual at the top end
-      var currentAccel = accel * (1.5 - (speed / maxSpeed) * 1.2); 
-      speed = AllFn.accelerate(speed, currentAccel, dt);
-    }
-    else if (keySlower) {
-      speed = AllFn.accelerate(speed, breaking, dt);
-    }
-    else {
-      speed = AllFn.accelerate(speed, decel, dt);
-    }
+      playerX = playerX - (dx * speedPercent * playerSegment.curve * centrifugal);
+  
+      if (!gameStart) {
+        speed = 0; // Completely prevent the player from getting a head start during the countdown
+      } else if (window.playerCrashedTimer > 0) {
+        speed = AllFn.accelerate(speed, decel * 2, dt); // Decelerate quickly if crashed
+        } else if (keyFaster) {
+          // Dynamic acceleration: Fast off the line, agonizingly gradual near 200mph
+          var currentAccel = accel * Math.max(0.1, 1.5 - Math.pow(speed / maxSpeed, 2) * 1.4); 
+          speed = AllFn.accelerate(speed, currentAccel, dt);
+          // Hard cap player speed so they can't infinitely accelerate away from the pack
+          speed = Math.min(speed, maxSpeed * 1.15);
+        }
+      else if (keySlower) {
+        speed = AllFn.accelerate(speed, breaking, dt);
+      }
+      else {
+        speed = AllFn.accelerate(speed, decel, dt);
+      }
+      
+      // Cornering friction scaled by racing line.
+      // Inside line (apex) = minimal friction. Outside line = heavy friction.
+      // The player's advantage comes from the ANGLE they take, not braking.
+      if (Math.abs(playerSegment.curve) > 0.3 && speed > maxSpeed * 0.35) {
+        var baseFriction = Math.abs(playerSegment.curve) * 500 * dt;
+        var lineFactor = window.racingLineFrictionFactor || 1.0;
+        var cornerFriction = baseFriction * lineFactor;
+        speed = Math.max(speed - cornerFriction, maxSpeed * 0.35);
+      }
   }
   else{
     // Hard decelerate player after finish line
@@ -171,6 +201,7 @@ function update(dt) {
     // Still update AI so they line up at the finish line!
     updateBikes(dt, playerSegment, playerW);
     updateCars(dt, playerSegment, playerW);
+    updatePlayerPosition();
   }
 
 
@@ -182,11 +213,11 @@ function update(dt) {
   if (Math.abs(playerX) > 0.9 && speed > maxSpeed * 0.1) {
     for (var ds = 0; ds < 3; ds++) {
       dustParticles.push({
-        sx:    width/2 + (playerX * width * 0.18) + (Math.random() - 0.5) * 40,
-        sy:    height - 20 + (Math.random() * 10),
+        sx:    width/2 + (Math.random() - 0.5) * 20, // Centered strictly on the tire
+        sy:    height - 5 + (Math.random() * 10), // Pinned down to the bottom of the wheel
         vx:    (Math.random() - 0.5) * 60,
-        vy:    -(40 + Math.random() * 80),
-        r:     6 + Math.random() * 10,
+        vy:    -(20 + Math.random() * 40), // Float up gently
+        r:     4 + Math.random() * 6, // Start as tiny pixels
         life:  0.5 + Math.random() * 0.4,
         maxLife: 1.0
       });
@@ -224,34 +255,54 @@ function update(dt) {
   }
 
 
-  for(n = 0 ; n < playerSegment.cars.length ; n++) {
-    car  = playerSegment.cars[n];
-    carW = car.sprite.w * SPRITES.SCALE;
-    if (speed > car.speed) {
-      if (AllFn.overlap(playerX, playerW, car.offset, carW, 0.8)) {
-        crash.play();
-        window.playerCrashedTimer = 3.0; // 3 second crash penalty
-        speed    = car.speed * (car.speed/speed);
-        position = AllFn.increase(car.z, -playerZ, trackLength);
-        break;
+    // Guard: never re-trigger while already crashed — prevents horn spam and position-reset loop
+    if (window.playerCrashedTimer <= 0) {
+      for(n = 0 ; n < playerSegment.cars.length ; n++) {
+        car  = playerSegment.cars[n];
+        
+        var carSegScale = AllFn.interpolate(
+          playerSegment.p1.screen.scale,
+          playerSegment.p2.screen.scale,
+          car.percent
+        );
+        carW = car.sprite.w * SPRITES.SCALE * 0.55 * (carSegScale / SPRITES.SCALE) * roadWidth;
+        
+        var speedDiff = speed - car.speed;
+        if (speedDiff > 0 || car.originalSpeed < 0) {
+          if (AllFn.overlap(playerX, playerW, car.offset, carW, 0.75)) {
+            playHonk();
+            crash.play();
+            window.playerCrashedTimer = 3.0;
+            
+            if (car.originalSpeed < 0) {
+                car.speed = 0;
+                speed = 0;
+            } else {
+                car.speed = 0;
+                car.stunTimer = 1.5;
+                speed = car.originalSpeed;
+            }
+            
+            position = AllFn.increase(car.z, -playerZ, trackLength);
+            break;
+          }
+        }
       }
     }
-  }
 
 
   for(n = 0 ; n < playerSegment.bikes.length ; n++) {
     bike  = playerSegment.bikes[n];
     bikeW = 21 * SPRITES.SCALE;
     
-    // Weapon range is wider (1.2) than physical bodies (0.7)
-    if (AllFn.overlap(playerX, playerW, bike.offset, bikeW, 1.2)) {
+    // Weapon range is horizontally generous (0.45)
+    if (Math.abs(playerX - bike.offset) < 0.45) {
       var isSwingingRight = (window.playerAttackSide === 1 && window.playerAttackTimer > 0);
       var isSwingingLeft = (window.playerAttackSide === -1 && window.playerAttackTimer > 0);
       var hitLanded = false;
 
       if (playerX < bike.offset && isSwingingRight){
-        crowbarHitSound.currentTime = 0;
-        crowbarHitSound.play().catch(e => {});
+        if (typeof crowbarHitSound !== 'undefined') { crowbarHitSound.currentTime = 0; crowbarHitSound.play().catch(e => {}); }
         bike.offset += 0.5; // knock them away
         bike.health = (bike.health || 3) - 1;
         bike.damageTimer = 0.5;
@@ -260,8 +311,7 @@ function update(dt) {
         hitLanded = true;
       }
       else if (playerX > bike.offset && isSwingingLeft){
-        crowbarHitSound.currentTime = 0;
-        crowbarHitSound.play().catch(e => {});
+        if (typeof crowbarHitSound !== 'undefined') { crowbarHitSound.currentTime = 0; crowbarHitSound.play().catch(e => {}); }
         bike.offset -= 0.5; // knock them away
         bike.health = (bike.health || 3) - 1;
         bike.damageTimer = 0.5;
@@ -269,6 +319,7 @@ function update(dt) {
         if (bike.health <= 0) { bike.speed = 0; bike.crashedTimer = 3.0; } // knock them down!
         hitLanded = true;
       }
+    }
       
       // Physical body collision
       if (!hitLanded && AllFn.overlap(playerX, playerW, bike.offset, bikeW, 0.7) && window.playerCrashedTimer <= 0) {
@@ -304,16 +355,15 @@ function update(dt) {
                 speed *= 0.995; // very minor penalty
             }
             
-            playerX = AllFn.limit(playerX, -2, 2);
-            bike.offset = AllFn.limit(bike.offset, -2, 2);
+            playerX = AllFn.limit(playerX, -3, 3);
+            bike.offset = AllFn.limit(bike.offset, -3, 3);
         }
       }
-    }
   }
 
 
 
-  playerX = AllFn.limit(playerX, -2, 2);
+  playerX = AllFn.limit(playerX, -3, 3);
   speed   = AllFn.limit(speed, 0, maxSpeed);
 
 
@@ -359,29 +409,58 @@ function updateBikes(dt, playerSegment, playerW) {
       continue;
     }
 
-    // --- SPEED (Road Rash 3 model: target speed + rubber band) ---
-    var targetSpeed = maxSpeed * bike.maxSpeedMult;
-    if (!gameStart || bike.finished) {
-      targetSpeed = 0;
-    } else {
-      // Rubber band: purely position-delta based, like the real game
-      var dist = bike.z - (position + playerZ);
-      if (dist <  -trackLength/2) dist += trackLength;
-      if (dist >   trackLength/2) dist -= trackLength;
-      if (dist < -4000) targetSpeed *= 1.15;  // Far behind: speed boost
-      if (dist >  5000) targetSpeed *= 0.88;  // Far ahead: ease off
+      // --- SPEED (Road Rash 3 model: target speed + rubber band) ---
+      var targetSpeed = 0;
+      var currentBikeAccel = accel * bike.accelMult;
+      
+      if (!gameStart || bike.finished) {
+        targetSpeed = 0;
+      } else {
+        // Rubber band and swarming logic
+        var dist = bike.z - (position + playerZ);
+        if (dist <  -trackLength/2) dist += trackLength;
+        if (dist >   trackLength/2) dist -= trackLength;
+        
+        var isStartOfRace = (position < 20000); // The first several seconds of the race
+        
+        if (isStartOfRace) {
+           // Everyone blasts off the line to create initial separation
+           targetSpeed = maxSpeed * 1.3; 
+           currentBikeAccel *= 5.0; 
+        } else {
+           var dist = bike.z - (position + playerZ);
+           if (dist < -trackLength/2) dist += trackLength;
+           if (dist >  trackLength/2) dist -= trackLength;
 
-      // Off-road penalty (Road Rash 3: significant slowdown on the shoulder)
-      if (Math.abs(bike.offset) > 1.0)
-        targetSpeed = Math.min(targetSpeed, offRoadLimit);
-    }
+           // Ensure AI always maintains a minimum speed even if the player is parked/crashed
+           var basePlayerSpeed = Math.max(speed, maxSpeed * 0.85);
+           var error = (bike.targetOffsetZ || 0) - dist;
 
-    // Smooth acceleration toward target
-    if (bike.speed < targetSpeed)
-      bike.speed = Math.min(bike.speed + accel * bike.accelMult * dt, targetSpeed);
-    else
-      bike.speed = Math.max(bike.speed - accel * dt, targetSpeed);
-    bike.speed = AllFn.limit(bike.speed, 0, maxSpeed * 1.2);
+           if (error > 0) {
+              // Behind target gap: PUNCH IT — scale boost by how far back they are
+              var catchupFactor = Math.min(error / 15000, 2.0);
+              targetSpeed = Math.max(basePlayerSpeed * (1.1 + catchupFactor), maxSpeed * 0.9);
+              currentBikeAccel *= 5.0;
+           } else {
+              // At or ahead of target gap: race normally at their own top speed
+              // Only apply a gentle cap if they're so far ahead they risk lapping the player
+              targetSpeed = maxSpeed * bike.maxSpeedMult;
+              if (dist > 60000) targetSpeed *= 0.85; // Only coast if nearly a lap ahead
+           }
+
+           // SWARM / COMBAT: right on the player, go hard
+           if (Math.abs(dist) < 2000) {
+              targetSpeed = Math.max(targetSpeed, basePlayerSpeed * 1.05 + Math.random() * 800);
+              currentBikeAccel *= 1.5;
+           }
+        }
+      }
+
+      if (bike.speed < targetSpeed)
+        bike.speed = Math.min(bike.speed + currentBikeAccel * dt, targetSpeed);
+      else
+        bike.speed = Math.max(bike.speed - accel * dt, targetSpeed);
+      bike.speed = AllFn.limit(bike.speed, 0, maxSpeed * 3.0); // Allow AI to reach up to 3.0x maxSpeed to guarantee they can catch up
 
     // --- COMBAT LOGIC ---
     var bikeW = 21 * SPRITES.SCALE;
@@ -420,34 +499,18 @@ function updateBikes(dt, playerSegment, playerW) {
     if (bike.damageTimer > 0) {
       bike.damageTimer -= dt;
     }
+      // --- STEERING (Road Rash 3 model: steer to avoid obstacles, recover from edge) ---
+      var steerDir = 0;
 
-    // --- STEERING (Road Rash 3 model: steer to avoid obstacles, recover from edge) ---
-    var steerDir = 0;
-
-    // 1. Emergency road recovery — highest priority
-    if (bike.offset < -0.95) {
-      steerDir = 1.0;
-    } else if (bike.offset > 0.95) {
-      steerDir = -1.0;
-    } else {
-      // 2. Look ahead for obstacles to dodge
-      var lookahead = 15;
+      // Look ahead for obstacles to dodge. Lower skill = lower lookahead (they dodge very late)
+      var lookahead = Math.floor(2 + bike.skillLevel * 13);
       for (var i = 1; i < lookahead && steerDir === 0; i++) {
         var seg = segments[(oldSegment.index + i) % segments.length];
 
         // Dodge player
         if (seg === playerSegment && bike.speed > speed &&
             AllFn.overlap(playerX, playerW, bike.offset, bikeW, 1.1)) {
-          steerDir = (bike.offset >= playerX) ? (1/i) : -(1/i);
-        }
-
-        // Dodge slower AI
-        for (var j = 0; j < seg.bikes.length && steerDir === 0; j++) {
-          var ob = seg.bikes[j];
-          if (ob !== bike && bike.speed > ob.speed &&
-              AllFn.overlap(bike.offset, bikeW, ob.offset, ob.sprite.w * SPRITES.SCALE, 1.1)) {
-            steerDir = (bike.offset >= ob.offset) ? (1/i) : -(1/i);
-          }
+          steerDir = (bike.offset >= playerX) ? (0.8/i) : -(0.8/i);
         }
 
         // Dodge traffic cars
@@ -455,21 +518,43 @@ function updateBikes(dt, playerSegment, playerW) {
           var oc = seg.cars[k];
           if (bike.speed > oc.speed &&
               AllFn.overlap(bike.offset, bikeW, oc.offset, oc.sprite.w * SPRITES.SCALE, 1.1)) {
-            steerDir = (bike.offset >= oc.offset) ? (1/i) : -(1/i);
+            steerDir = (bike.offset >= oc.offset) ? (0.8/i) : -(0.8/i);
           }
         }
       }
 
-      // 3. Gentle drift back toward preferred lane when no obstacles
+      // Gentle drift back toward preferred lane when no obstacles
       if (steerDir === 0) {
         var laneTarget = bike.laneOffset || 0;
         var diff = laneTarget - bike.offset;
         steerDir = Math.max(-0.3, Math.min(0.3, diff * 2.0));
       }
-    }
 
-    bike.offset += steerDir * dt * 3.0;
-    bike.offset  = Math.max(-1.5, Math.min(1.5, bike.offset));
+      // Softly nudge away from extreme dirt edges
+      if (bike.offset < -2.0) steerDir += 0.5;
+      if (bike.offset >  2.0) steerDir -= 0.5;
+
+      // --- CURVE SPEED LOSS (Core Road Rash mechanic) ---
+      // All AI bikes lose speed on curves. Higher skill = less loss.
+      // This is what lets the player gain ground by braking and apexing properly.
+      if (Math.abs(oldSegment.curve) > 0.3) {
+          var curveMagnitude = Math.abs(oldSegment.curve);
+          // Elite (skill 0.85-1.0) lose very little. Novices (0.1-0.4) lose a lot.
+          var skillFactor = 1.0 - bike.skillLevel; // 0 for perfect, 0.9 for novice
+          var bikeCornerFriction = curveMagnitude * (800 + skillFactor * 1200) * dt;
+          var bikeSpeedFloor = maxSpeed * (0.35 + bike.skillLevel * 0.15); // Elites hold higher floor speed
+          bike.speed = Math.max(bike.speed - bikeCornerFriction, bikeSpeedFloor);
+      }
+
+      // --- CURVE DRIFT (Low skill bikes physically drift outward on turns) ---
+      if (bike.skillLevel < 0.9 && Math.abs(oldSegment.curve) > 0.5) {
+          var drift = oldSegment.curve * (1.0 - bike.skillLevel) * dt * 2.0;
+          bike.offset -= drift; // Centrifugal drift outward
+      }
+
+      bike.offset += steerDir * dt * 3.0;
+      // Hard clamp so they physically never exit the dirt shoulder boundary
+      bike.offset  = Math.max(-2.5, Math.min(2.5, bike.offset));
 
     // --- SPRITE SELECTION (Dynamic) ---
     // Calculate a target lean based on steering and the road curve
@@ -508,9 +593,20 @@ function updateBikes(dt, playerSegment, playerW) {
     var oldZ = bike.z;
     bike.z = AllFn.increase(bike.z, dt * bike.speed, trackLength);
 
-    // Finish line
-    if (bike.z < oldZ && (position + playerZ) > trackLength / 2)
+    // Finish line: bike wraps the track, meaning it crossed the finish line
+    if (bike.z < oldZ && (position + playerZ) > trackLength / 2) {
       bike.finished = true;
+      if (!bike.finishTime) bike.finishTime = window.raceTime;
+      // Park the bike exactly at the finish line and hold it there
+      bike.z = trackLength - playerZ - segmentLength * 2;
+      bike.speed = 0;
+    }
+    
+    // If already finished, keep it pinned at the finish line
+    if (bike.finished) {
+      bike.speed = 0;
+      bike.z = trackLength - playerZ - segmentLength * 2;
+    }
 
     // Update segment membership
     newSegment = findSegment(bike.z);
@@ -531,12 +627,40 @@ function handleBikeDirection(bike, bikeSegment, playerSegment, playerW) {
 
 
 function updateCars(dt, playerSegment, playerW) {
-  var n, car, oldSegment, newSegment;
-  for(n = 0 ; n < cars.length ; n++) {
-    car         = cars[n];
-    oldSegment  = findSegment(car.z);
+    var n, car, oldSegment, newSegment;
+    for(n = 0 ; n < cars.length ; n++) {
+      car         = cars[n];
+      
+      // Handle resuming from collisions
+      if (car.originalSpeed < 0) {
+          if (car.speed === 0) {
+              // Oncoming car waits until player is totally out of the way (ignoring X offset)
+              var zDist = Math.abs(car.z - (position + playerZ));
+              var isNear = (zDist < segmentLength * 10) || (trackLength - zDist < segmentLength * 10);
+              if (!isNear) {
+                  car.speed = car.originalSpeed;
+              }
+          }
+      } else {
+          if (car.stunTimer > 0) {
+              car.stunTimer -= dt;
+              if (car.stunTimer <= 0) {
+                  car.speed = car.originalSpeed;
+              }
+          }
+      }
+
+      oldSegment  = findSegment(car.z);
     car.offset  = car.offset + handleCarDirection(car, oldSegment, playerSegment, playerW);
-    car.z       = AllFn.increase(car.z, dt * car.speed, trackLength);
+      
+      // Enforce strict lane boundaries so they never swerve off the road or cross the center line
+      if (car.speed < 0) {
+          car.offset = -0.5; // Locked dead center in left lane
+      } else {
+          car.offset = 0.5; // Locked dead center in right lane
+      }
+
+      car.z       = AllFn.increase(car.z, dt * car.speed, trackLength);
     car.percent = AllFn.percentRemaining(car.z, segmentLength);
     newSegment  = findSegment(car.z);
     if (oldSegment != newSegment) {
@@ -548,8 +672,9 @@ function updateCars(dt, playerSegment, playerW) {
 }
 
 function handleCarDirection(car, carSegment, playerSegment, playerW) {
+    if (car.speed < 0) return 0; // Oncoming cars stubbornly stay in their lane
 
-  var i, j, dir, segment, othercar, othercarW, lookahead = 20, carW = car.sprite.w * SPRITES.SCALE;
+    var i, j, dir, segment, othercar, othercarW, lookahead = 20, carW = 99 * SPRITES.SCALE;
 
   //when out of render distance, no need to handle the offset
   if ((carSegment.index - playerSegment.index) > drawDistance)
@@ -570,7 +695,7 @@ function handleCarDirection(car, carSegment, playerSegment, playerW) {
 
     for(j = 0 ; j < segment.cars.length ; j++) {
       othercar  = segment.cars[j];
-      othercarW = othercar.sprite.w * SPRITES.SCALE;
+      othercarW = 99 * SPRITES.SCALE;
       if ((car.speed > othercar.speed) && AllFn.overlap(car.offset, carW, othercar.offset, othercarW, 1.2)) {
         if (othercar.offset > 0.5)
           dir = -1;
@@ -607,7 +732,7 @@ function render() {
   ctx.clearRect(0, 0, width, height);
 
   // Smooth sunset gradient
-  var gradient = ctx.createLinearGradient(0, 0, 0, height/2 + 100);
+  var gradient = ctx.createLinearGradient(0, 0, 0, height * 0.35 + 100);
   gradient.addColorStop(0, "#1F0322");   // Deep purple/black at the top
   gradient.addColorStop(0.3, "#8A1C49"); // Crimson red
   gradient.addColorStop(0.6, "#E25822"); // Sunset orange
@@ -615,15 +740,19 @@ function render() {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
   
-  // Draw the low glowing sun — tracks dead ahead using road curve
+  // Draw the low glowing sun — fixed in the world coordinates
   ctx.save();
-  // Accumulate the curve offset so the sun follows the vanishing point
-  var curveAccum = 0;
-  for (var si = 0; si < Math.min(100, drawDistance); si++) {
-    curveAccum += segments[(baseSegment.index + si) % segments.length].curve;
-  }
-  var sunX = width / 2 - (curveAccum * 0.4);
-  var sunY = height / 2 - 70; // Lifted above the horizon line
+  // Use skyOffset to simulate the sun being a fixed point in the world
+  // skyOffset goes 0 to 1 for a full 360 degree rotation. Let's make the 360 view 4x the screen width.
+  var fovWidth = width * 4; 
+  var sunX = width / 2 - (skyOffset * fovWidth);
+  // Wrap sunX so it stays within a continuous 360 panorama
+  sunX = sunX % fovWidth;
+  if (sunX > fovWidth / 2) sunX -= fovWidth;
+  if (sunX < -fovWidth / 2) sunX += fovWidth;
+  
+  // Lift the sun much higher into the sky
+  var sunY = height * 0.15; 
 
   ctx.beginPath();
   ctx.arc(sunX, sunY, 36, 0, Math.PI * 2);
@@ -691,20 +820,20 @@ function render() {
       spriteScale = AllFn.interpolate(segment.p1.screen.scale, segment.p2.screen.scale, car.percent);
       spriteX     = AllFn.interpolate(segment.p1.screen.x,     segment.p2.screen.x,     car.percent) + (spriteScale * car.offset * roadWidth * width/2);
       spriteY     = AllFn.interpolate(segment.p1.screen.y,     segment.p2.screen.y,     car.percent);
-      Render.sprite(ctx, width, height, resolution, roadWidth, sprites, car.sprite, spriteScale * 0.95, spriteX, spriteY, -0.5, -1, segment.clip, spriteScale * 0.82);
+      
+      var customCarScale = spriteScale * 1.13 * (86 / car.sprite.w); // Increased car size by 15%
+      Render.sprite(ctx, width, height, resolution, roadWidth, sprites, car.sprite, customCarScale, spriteX, spriteY, -0.5, -1, segment.clip, customCarScale * 0.88);
     }
 
     for(i = 0 ; i < segment.bikes.length ; i++) {
       bike        = segment.bikes[i];
-      sprite      = bike.sprite;
-      // console.log(sprite);
       spriteScale = AllFn.interpolate(segment.p1.screen.scale, segment.p2.screen.scale, bike.percent);
       spriteX     = AllFn.interpolate(segment.p1.screen.x,     segment.p2.screen.x,     bike.percent) + (spriteScale * bike.offset * roadWidth * width/2);
       spriteY     = AllFn.interpolate(segment.p1.screen.y,     segment.p2.screen.y,     bike.percent);
 
       var bikeWorldY = AllFn.interpolate(segment.p1.world.y, segment.p2.world.y, bike.percent);
       var screenJumpOffset = spriteScale * Math.max(0, (bike.elevation || bikeWorldY) - bikeWorldY) * height/2;
-      var customBikeScale = spriteScale * (21 / bike.sprite.w) * 2.8;
+      var customBikeScale = spriteScale * (21 / bike.sprite.w) * 2.875;
 
       Render.sprite(ctx, width, height, resolution, roadWidth, sprites, bike.sprite, customBikeScale, spriteX, spriteY - screenJumpOffset, -0.5, -1, segment.clip, customBikeScale, bike.flipX);
     }
@@ -733,8 +862,8 @@ function render() {
     }
 
   }
-  speedoMeter(speed);
-  displayRank(rank,bikes.length+1);
+  
+  
 
   // Draw screen-space dust particles on top of everything
   if (dustParticles.length > 0) {
@@ -744,9 +873,8 @@ function render() {
       var alpha = Math.max(0, (dr.life / (dr.maxLife || 1.0)) * 0.75);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = '#DDB882';
-      ctx.beginPath();
-      ctx.arc(dr.sx, dr.sy, dr.r, 0, Math.PI * 2);
-      ctx.fill();
+      // Render as tiny square pixels instead of circles
+      ctx.fillRect(dr.sx - dr.r/2, dr.sy - dr.r/2, dr.r, dr.r);
     }
     ctx.globalAlpha = 1.0;
     ctx.restore();
@@ -765,6 +893,11 @@ function render() {
   ctx.fillRect(0, 0, width, height);
   ctx.restore();
 
+  // Render HUD on top of everything else
+  if (typeof renderHUD === 'function') {
+    var rank = 1 + bikes.filter(b => (b.finished ? b.finishTime < window.playerFinishTime : (b.z > position + playerZ))).length;
+    renderHUD(speed, rank, bikes.length + 1, window.raceTime || 0);
+  }
 }
 
 
@@ -851,145 +984,132 @@ function addDownhillToEnd(x) {
 function resetRoad() {
   segments = [];
 
-  // 1. Starting straight to build speed before hitting the dunes
+  // 1. Starting straight to build speed
   addStraight(100);
 
-  // 2. First rolling dune (gentle right curve, uphill then downhill)
-  addCurve(150, 1.5, 20);
-  addCurve(150, 1.5, -20);
+  // 2. First rolling dune (slight increase in curve and hill)
+  addCurve(150, 1.8, 60);
+  addCurve(150, 1.8, -50);
   
   // 3. Valley floor straight
   addStraight(50);
 
-  // 4. Sweeping left dune (long climb, steep drop)
-  addCurve(250, -2.0, 30);
-  addCurve(100, -2.0, -30);
+  // 4. Sweeping left dune
+  addCurve(250, -2.3, 80);
+  addCurve(100, -2.3, -60);
 
   // 5. Short straight transition
   addStraight(50);
 
   // 6. Tight S-curve through a dune pass
-  addCurve(150, 2.5, 15);
-  addCurve(150, -2.5, -15);
+  addCurve(150, 2.8, 50);
+  addCurve(150, -2.8, -40);
   
   // 7. Long, undulating right sweeper (coastline cruise)
-  addCurve(200, 1.8, 10);
-  addCurve(200, 1.8, -10);
-  addCurve(200, 1.8, 15);
+  addCurve(200, 2.1, 55);
+  addCurve(200, 2.1, -45);
+  addCurve(200, 2.1, 70);
   
   // 8. Dropping back down to sea level with a left turn
-  addCurve(250, -2.2, -15);
-  
-  // 9. Quick roller-coaster bumps (mini dunes)
-  addCurve(100, 1.5, 20);
-  addCurve(100, -1.5, -20);
-  addCurve(100, 1.5, 20);
-  addCurve(100, -1.5, -20);
-
   // 10. Long straight to rest
   addStraight(100);
 
   // 11. Final massive dune climb and leftward drop to the finish
-  addCurve(250, -1.5, 40);
-  addCurve(200, -2.5, -40);
+  addCurve(250, -2.0, 45);
+  addCurve(200, -3.0, -45);
 
   // CRITICAL: Bring the track back down to Y=0 to create a seamless loop!
   addDownhillToEnd();
+
+  // Calculate track length BEFORE spawning objects so they know where to spawn
+  trackLength = segments.length * segmentLength;
 
   resetSprites();
   resetBikes();
   resetCars();
 
-  segments[findSegment(playerZ).index + 12].color = COLORS.START;
-  segments[findSegment(playerZ).index + 13].color = COLORS.START;
-  for(var n = 0 ; n < rumbleLength ; n++)
-    segments[segments.length-1-n].color       = COLORS.FINISH;
-
-  trackLength = segments.length * segmentLength;
+  for(var n = 0 ; n < rumbleLength ; n++) {
+    segments[segments.length-1-n].color = (n % 2 === 0) ? COLORS.FINISH_EVEN : COLORS.FINISH_ODD;
+  }
 }
 
 function findSegment(z) {
   return segments[Math.floor(z/segmentLength) % segments.length];
 }
 
-//playerposition
-
-
 function updatePlayerPosition(){
-    if(true){ //to be checked if  crossFinish is true or not=================================================
-
-
-        var playerPosition=[];
-        var alreadyFinished=0;
-
-        for (var i = 0; i < bikes.length; i++) {
-            if(bikes[i].crossFinish){
-                alreadyFinished++;
-            }
-            else{
-                var key = bikes[i].name || ('enemy'+i);
-                playerPosition.push({'name':key,
-                    'position' : bikes[i].z});
-            }
-
+    var allRacers = [];
+    
+    var pScore = crossFinish ? (trackLength + (100000 - (window.playerFinishTime || window.raceTime))) : position;
+    allRacers.push({ name: 'player', score: pScore, isPlayer: true });
+    
+    for (var i = 0; i < bikes.length; i++) {
+        var b = bikes[i];
+        var bScore = b.finished ? (trackLength + (100000 - b.finishTime)) : b.z;
+        allRacers.push({ name: b.name || ('Enemy ' + (i+1)), score: bScore, isPlayer: false, originalIndex: i });
+    }
+    
+    allRacers.sort(function(a, b) {
+        return b.score - a.score;
+    });
+    
+    window.raceLeaderboard = allRacers;
+    
+    for(var i=0; i<allRacers.length; i++) {
+        if(allRacers[i].isPlayer) {
+            rank = i + 1;
+            lastPosition = rank;
+            break;
         }
-        playerPosition.push({'name':'player',
-            'position':position});
-
-        playerPosition.sort((a,b)=>{
-            return b.position-a.position;
-        });
-        
-        // Export globally for the post-race screen
-        window.raceLeaderboard = playerPosition;
-
-        for(var i=0;i<playerPosition.length;i++){
-          if(playerPosition[i].name=='player'){
-              var pposition=i+1+alreadyFinished;
-              rank = pposition;
-              // console.log(pposition, bikes.length+1);
-              lastPosition=pposition;
-              break;
-          }
-      }
-  }
-  else{
-      console.log(lastPosition,enemies.length + 1);
-  }
-
+    }
 }
 
 
 function resetCars() {
-  cars = [];
-  var n, car, segment, offset, z, sprite, speed;
-  for (var n = 0 ; n < totalCars ; n++) {
-    offset = Math.random() * 0.8; // Only right side of the road
-    
-    var validZ = false;
-    var attempts = 0;
-    while (!validZ && attempts < 50) {
-      z = (Math.floor(Math.random() * (segments.length - 40)) + 40) * segmentLength;
-      validZ = true;
-      for (var j = 0; j < cars.length; j++) {
-         if (Math.abs(cars[j].z - z) < segmentLength * 80) { // Keep them at least 80 segments apart
+    cars = [];
+    var n, car, segment, offset, z, sprite, speed;
+    for (var n = 0 ; n < totalCars ; n++) {
+      // 20% oncoming, 80% forward
+      var isOncoming = Math.random() < 0.2;
+      
+      if (isOncoming) {
+          offset = -0.5; // Perfectly centered in the left lane
+          sprite = AllFn.randomChoice(SPRITES.CARS_ONCOMING);
+          speed = -(maxSpeed * 0.5 + Math.random() * (maxSpeed * 0.2));
+      } else {
+          offset = 0.5; // Perfectly centered in the right lane
+          sprite = AllFn.randomChoice(SPRITES.CARS_FORWARD);
+          speed  = maxSpeed * 0.85 + Math.random() * (maxSpeed * 0.10);
+      }
+      
+      var validZ = false;
+      var attempts = 0;
+      
+      // Ensure cars only spawn on the far side of the track (never near the starting line or the very end of the lap)
+      var minZ = trackLength * 0.40; // Start at 40% across the track (prevents oncoming cars from backing into the start line too soon)
+      var availableZ = trackLength * 0.30; // Max spawn is 70% (prevents forward cars from wrapping around the finish line and passing the player at the start)
+
+      while (!validZ && attempts < 50) {
+        z = minZ + Math.random() * availableZ;
+        validZ = true;
+        for (var j = 0; j < cars.length; j++) {
+           if (Math.abs(cars[j].z - z) < segmentLength * 300) { // Massive 300 segment gap between cars
              validZ = false;
              break;
-         }
+           }
+        }
+        attempts++;
       }
-      attempts++;
+  
+      // If we couldn't find a valid spot after 50 random attempts, skip this car to prevent bunching
+      if (!validZ) continue;
+
+      car = { offset: offset, z: z, sprite: sprite, speed: speed, originalSpeed: speed, stunTimer: 0 };
+      segment = findSegment(car.z);
+      segment.cars.push(car);
+      cars.push(car);
     }
-
-    sprite = AllFn.randomChoice(SPRITES.CARS);
-    speed  = maxSpeed/4;
-    car = { offset: offset, z: z, sprite: sprite, speed: speed };
-    segment = findSegment(car.z);
-    segment.cars.push(car);
-    cars.push(car);
-  }
 }
-
-
 
 
 
@@ -999,29 +1119,43 @@ function resetBikes() {
   bikes = [];
   var n, bike, segment;
   var NAMES = ["Axel Graves", "Roxy Vane", "Mack 'Roadkill' Mercer", "Jett Malone", "Vera Knox", "Bishop Kane", "Duke Holloway", "Cassidy Blaze", "Rex Calhoun"];
-  var laneOffsets = [-0.5, 0.5, -0.3, 0.3, -0.6, 0.6, -0.4, 0.4, 0];
+  var laneOffsets = [-0.4, 0.4, -0.2, 0.2, -0.3, 0.3, -0.1, 0.1, 0];
 
   for (n = 0; n < totalBikes; n++) {
     var isLeader    = (n >= totalBikes - 3);
+    var isBackmarker = (n < 4); // First 4 placed bikes
     var laneOff     = laneOffsets[n % laneOffsets.length];
-    var maxSpeedMult, accelMult, startZ;
-
-    if (isLeader) {
-      maxSpeedMult = 1.05 + Math.random() * 0.10;
-      accelMult    = 1.0;
-      startZ       = (cameraHeight * cameraDepth) + segmentLength * (10 + (n - (totalBikes - 3)) * 4);
-    } else {
-      var row      = Math.floor(n / 2);
-      maxSpeedMult = 0.88 + Math.random() * 0.18;
-      accelMult    = 1.1;
-      startZ       = (cameraHeight * cameraDepth) + segmentLength * (1.5 + row * 2);
-    }
+    var maxSpeedMult, accelMult, startZ, skillLevel, targetOffsetZ;
+  
+      if (isLeader) {
+          skillLevel   = 0.88 + Math.random() * 0.12; // 0.88 to 1.0 — Elite
+          maxSpeedMult = 1.20 + Math.random() * 0.05; // 120% to 125% — clearly faster than player
+          accelMult    = 1.8;
+          startZ       = (cameraHeight * cameraDepth) + segmentLength * (10 + (n - (totalBikes - 3)) * 4);
+          targetOffsetZ = 8000 + Math.random() * 10000;
+        } else if (isBackmarker) {
+          var row      = Math.floor(n / 2);
+          skillLevel   = 0.80 + Math.random() * 0.10; // 0.80 to 0.90
+          maxSpeedMult = 1.16 + Math.random() * 0.04; // 116% to 120% — above player cap
+          accelMult    = 1.6;
+          startZ       = (cameraHeight * cameraDepth) + segmentLength * (1.5 + row * 2);
+          targetOffsetZ = 2000 + Math.random() * 6000;
+        } else {
+          var row      = Math.floor(n / 2);
+          skillLevel   = 0.83 + Math.random() * 0.10; // 0.83 to 0.93
+          maxSpeedMult = 1.17 + Math.random() * 0.04; // 117% to 121% — above player cap
+          accelMult    = 1.7;
+          startZ       = (cameraHeight * cameraDepth) + segmentLength * (1.5 + row * 2);
+          targetOffsetZ = 3000 + Math.random() * 8000;
+        }
 
     bike = {
       name:         (n < NAMES.length) ? NAMES[n] : 'Rival ' + n,
       offset:       laneOff,
       laneOffset:   laneOff,
       z:            startZ,
+      targetOffsetZ: targetOffsetZ,
+      skillLevel:   skillLevel,
       percent:      AllFn.percentRemaining(startZ, segmentLength),
       sprite:       SPRITES.ENEMY_DRIVE,
       speed:        0,
@@ -1074,9 +1208,24 @@ Game.run({
     "enemy-drive", "enemy-hard-left-turn", "enemy-hard-right-turn",
     "enemy-left-turn", "enemy-right-turn",
     "enemy-weapon-swing-right", "enemy-weapon-wind-up-right",
-    "start-screen", "start-screen2"
+    "start-screen", "start-screen2",
+    "cars/sedan-back", "cars/sedan-front",
+    "cars/sports-car-back", "cars/sports-car-front",
+    "cars/suv-back", "cars/suv-front",
+    "game-ui-dashboard"
   ],
   keys: [
+    { keys: [KEY.ESCAPE], mode: 'down', action: function() { 
+      gamePaused = !gamePaused; 
+      if (typeof audioCtx !== 'undefined') {
+        if (gamePaused && audioCtx.state === 'running') audioCtx.suspend();
+        else if (!gamePaused && audioCtx.state === 'suspended') audioCtx.resume();
+      }
+      if (window.retroAudioEngine && window.retroAudioEngine.audioCtx) {
+        if (gamePaused && window.retroAudioEngine.audioCtx.state === 'running') window.retroAudioEngine.audioCtx.suspend();
+        else if (!gamePaused && window.retroAudioEngine.audioCtx.state === 'suspended') window.retroAudioEngine.audioCtx.resume();
+      }
+    } },
     { keys: [KEY.LEFT,  KEY.A], mode: 'down', action: function() { keyLeft   = true;  } },
     { keys: [KEY.RIGHT, KEY.D], mode: 'down', action: function() { keyRight  = true;  } },
     { keys: [KEY.UP,    KEY.W], mode: 'down', action: function() { keyFaster = true;  } },
@@ -1126,8 +1275,20 @@ Game.run({
     
     window.startScreenImage = images[26];
     window.startScreenImage2 = images[27];
-    
-    reset();
+      
+      SPRITES.CARS_FORWARD = [
+          { image: images[28], w: 1023, h: 882 },
+          { image: images[30], w: 1023, h: 882 },
+          { image: images[32], w: 1023, h: 882 }
+      ];
+      
+      SPRITES.CARS_ONCOMING = [
+          { image: images[29], w: 1023, h: 882 },
+          { image: images[31], w: 1023, h: 882 },
+          { image: images[33], w: 1023, h: 882 }
+      ];
+
+      reset();
   }
 });
 
@@ -1159,3 +1320,4 @@ function reset(options) {
   if ((segments.length==0) || (options.segmentLength) || (options.rumbleLength))
     resetRoad();
 }
+

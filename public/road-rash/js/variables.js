@@ -26,7 +26,7 @@ function playMusic() {
     musicNode.buffer = musicBuffer;
     musicNode.loop = true;
     var gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0.0; // MUTED
+    gainNode.gain.value = 0.2; // Dropped by 20% absolute (from 0.4 down to 0.2)
     musicNode.connect(gainNode);
     gainNode.connect(audioCtx.destination);
     musicNode.start();
@@ -39,12 +39,31 @@ function playBeep(freq, duration) {
   var gain = audioCtx.createGain();
   osc.type = 'square';
   osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-  gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.375, audioCtx.currentTime); // Reduced by 25% from 0.5
   gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
   osc.connect(gain);
   gain.connect(audioCtx.destination);
   osc.start();
   osc.stop(audioCtx.currentTime + duration);
+}
+
+function playHonk() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  var osc1 = audioCtx.createOscillator();
+  var osc2 = audioCtx.createOscillator();
+  var gain = audioCtx.createGain();
+  osc1.type = 'sawtooth';
+  osc2.type = 'sawtooth';
+  osc1.frequency.setValueAtTime(350, audioCtx.currentTime); 
+  osc2.frequency.setValueAtTime(400, audioCtx.currentTime); 
+  gain.gain.setValueAtTime(0.06, audioCtx.currentTime); // Lowered significantly
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.0);
+  osc1.connect(gain);
+  osc2.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc1.start(); osc2.start();
+  osc1.stop(audioCtx.currentTime + 1.0);
+  osc2.stop(audioCtx.currentTime + 1.0);
 }
 
 
@@ -63,7 +82,7 @@ var fps           = 60;
 var step          = 1/fps;
 var width         = 1280;
 var height        = 720;
-var centrifugal   = 0.3;  // Reference value from jakesgordon javascript-racer
+var centrifugal   = 0.6;  // Increased from 0.3 to prevent auto-turning on bends
 var skySpeed      = 0.001;
 var hillSpeed     = 0.002;
 var treeSpeed     = 0.003;
@@ -74,7 +93,7 @@ var segments      = [];
 var dustParticles = [];
 
 var cars           = [];
-var totalCars = 30;
+var totalCars = 8;
 
 var bikes         =[];
 var totalBikes = 8;
@@ -84,7 +103,7 @@ var totalBikes = 8;
 var background    = null;
 var sprites       = null;
 var resolution    = null;
-var roadWidth     = 2000;
+var roadWidth     = 1400;
 var segmentLength = 200;
 var rumbleLength  = 3;
 var trackLength   = null;
@@ -100,7 +119,7 @@ var playerVelocityX = 0;
 
 var position      = 0;
 var speed         = 0;
-var maxSpeed      = (segmentLength/step) * 1.2;
+var maxSpeed      = segmentLength/step;
 var accel         =  maxSpeed/5;
 var breaking      = -maxSpeed;
 var decel         = -maxSpeed/5;
@@ -125,12 +144,13 @@ var initialCD = false;
 var countdown = 3;
 var gameStart = false;
 var gameOver = false;
+var gamePaused = false;
 var gmOv = 0;
 // var crossFinish = false;
 
 var rank = 0 ;
 var KEY = {
-  LEFT:  37, UP:  38, RIGHT: 39, DOWN: 40,
+  ESCAPE: 27, LEFT:  37, UP:  38, RIGHT: 39, DOWN: 40,
   A:     65, D:   68, S:     83, W:    87,
   Q: 81 , E :69 , Z: 90, C: 67
 };
@@ -141,8 +161,9 @@ var COLORS = {
   FOG:  '#005108',
   LIGHT:  { road: '#6B6B6B', grass: '#4A1134', rumble: '#555555', lane: '#CCCCCC', beach: '#E2C29A', water: '#1F3C59' },
   DARK:   { road: '#6B6B6B', grass: '#2E071E', rumble: '#BBBBBB', beach: '#D6B48D', water: '#1F3C59' },
-  START:  { road: 'white',   grass: 'white',   rumble: 'white', beach: 'white', water: 'white' },
-  FINISH: { road: 'black',   grass: 'black',   rumble: 'black', beach: 'black', water: 'black' }
+  START:  { road: 'white', grass: '#4A1134', rumble: 'white', lane: '#CCCCCC', beach: '#E2C29A', water: '#1F3C59' },
+  FINISH_EVEN: { road: 'checkered_even', grass: '#4A1134', rumble: '#555555', lane: '#CCCCCC', beach: '#E2C29A', water: '#1F3C59' },
+  FINISH_ODD:  { road: 'checkered_odd',  grass: '#2E071E', rumble: '#BBBBBB', beach: '#D6B48D', water: '#1F3C59' }
 };
 
 var BACKGROUND = {
@@ -180,7 +201,7 @@ var SPRITES = {
   PLAYER_RIGHT:           { x:  58 , y:  0, w:   25,h:  50 }
 };
 
-SPRITES.SCALE = 0.1 * (1/SPRITES.PLAYER_STRAIGHT.w) //scaling the images
+SPRITES.SCALE = 0.115 * (1/SPRITES.PLAYER_STRAIGHT.w) //scaling the images
 
 SPRITES.CARS       = [SPRITES.CAR01, SPRITES.CAR02];
 SPRITES.BIKES      = [SPRITES.BIKE01, SPRITES.BIKE02, SPRITES.BIKE03];
